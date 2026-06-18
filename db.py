@@ -170,6 +170,14 @@ def get_prompt(prompt_id: int) -> Prompt | None:
     return _prompt_from_row(row) if row else None
 
 
+def update_prompt_tags(prompt_id: int, tags: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE prompts SET tags = ? WHERE id = ?",
+            (tags.strip(), prompt_id),
+        )
+
+
 def list_prompts(
     search: str = "",
     sort_by: PromptSortField = "created_at",
@@ -180,9 +188,10 @@ def list_prompts(
     direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
     query = f"SELECT * FROM prompts WHERE 1=1"
     params: list[str] = []
-    if search.strip():
+    tokens = [part.strip() for part in search.split() if part.strip()]
+    for token in tokens:
         query += " AND (text LIKE ? OR tags LIKE ?)"
-        pattern = f"%{search.strip()}%"
+        pattern = f"%{token}%"
         params.extend([pattern, pattern])
     query += f" ORDER BY {column} {direction}"
     with get_connection() as conn:
@@ -286,6 +295,11 @@ def count_models() -> int:
     return int(row["cnt"]) if row else 0
 
 
+def delete_model(model_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+
+
 # --- results ---
 
 
@@ -358,6 +372,19 @@ def set_setting(key: str, value: str) -> None:
             """,
             (key, value),
         )
+
+
+def list_settings() -> list[tuple[str, str]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings ORDER BY key"
+        ).fetchall()
+    return [(row["key"], row["value"]) for row in rows]
+
+
+def delete_setting(key: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
 
 def _self_test() -> None:
