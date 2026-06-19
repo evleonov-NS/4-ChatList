@@ -1,4 +1,6 @@
+import subprocess
 import sys
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +36,7 @@ import db
 from dialogs import (
     MarkdownViewDialog,
     ModelsDialog,
+    PromptsDialog,
     SettingsDialog,
     _configure_readable_table,
     _table_cell,
@@ -109,15 +112,22 @@ class MainWindow(QMainWindow):
         menu_bar.addMenu(file_menu)
 
         settings_menu = QMenu("Настройки", self)
+        prompts_action = QAction("Промты...", self)
+        prompts_action.triggered.connect(self._open_prompts_dialog)
         models_action = QAction("Модели...", self)
         models_action.triggered.connect(self._open_models_dialog)
         app_settings_action = QAction("Параметры программы...", self)
         app_settings_action.triggered.connect(self._open_settings_dialog)
         history_action = QAction("История результатов", self)
         history_action.triggered.connect(self._toggle_history_mode)
+        db_viewer_action = QAction("Просмотр базы данных...", self)
+        db_viewer_action.triggered.connect(self._launch_test_db)
+        settings_menu.addAction(prompts_action)
         settings_menu.addAction(models_action)
         settings_menu.addAction(app_settings_action)
         settings_menu.addAction(history_action)
+        settings_menu.addSeparator()
+        settings_menu.addAction(db_viewer_action)
         menu_bar.addMenu(settings_menu)
 
         view_menu = QMenu("Вид", self)
@@ -185,6 +195,25 @@ class MainWindow(QMainWindow):
             self._on_prompt_search_selected
         )
         layout.addWidget(self.prompt_search_panel)
+
+        prompt_buttons = QHBoxLayout()
+        self.prompts_button = self._style_button(
+            QPushButton("Промты…"),
+            "secondary",
+            "Таблица сохранённых промтов: добавление, изменение, удаление",
+        )
+        self.prompts_button.clicked.connect(self._open_prompts_dialog)
+        prompt_buttons.addWidget(self.prompts_button)
+
+        self.db_viewer_button = self._style_button(
+            QPushButton("База данных…"),
+            "secondary",
+            "Открыть test-db.py для просмотра SQLite",
+        )
+        self.db_viewer_button.clicked.connect(self._launch_test_db)
+        prompt_buttons.addWidget(self.db_viewer_button)
+        prompt_buttons.addStretch()
+        layout.addLayout(prompt_buttons)
 
         self.prompt_filter.installEventFilter(self)
 
@@ -896,6 +925,53 @@ class MainWindow(QMainWindow):
         dialog = ModelsDialog(self)
         dialog.exec()
         self.load_models()
+
+    def _open_prompts_dialog(self) -> None:
+        dialog = PromptsDialog(self)
+        dialog.exec()
+        self.load_prompts()
+
+    def _launch_test_db(self) -> None:
+        db_path = db.get_db_path()
+        if not db_path.is_file():
+            db.init_db(db_path)
+
+        if getattr(sys, "frozen", False):
+            base_dir = Path(sys.executable).resolve().parent
+            python = shutil.which("python") or shutil.which("python3")
+        else:
+            base_dir = Path(__file__).resolve().parent
+            python = sys.executable
+
+        script = base_dir / "test-db.py"
+        if not script.is_file():
+            QMessageBox.warning(
+                self,
+                "База данных",
+                f"Не найден файл test-db.py:\n{script}",
+            )
+            return
+        if python is None:
+            QMessageBox.warning(
+                self,
+                "База данных",
+                "Не найден интерпретатор Python для запуска test-db.py",
+            )
+            return
+
+        try:
+            subprocess.Popen(
+                [python, str(script), str(db_path.resolve())],
+                cwd=str(base_dir),
+            )
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "База данных",
+                f"Не удалось запустить test-db.py:\n{exc}",
+            )
+            return
+        self.statusBar().showMessage(f"Запущен просмотр базы: {db_path.name}", 4000)
 
     def _open_settings_dialog(self) -> None:
         dialog = SettingsDialog(self)

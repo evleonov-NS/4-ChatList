@@ -178,6 +178,30 @@ def update_prompt_tags(prompt_id: int, tags: str) -> None:
         )
 
 
+def update_prompt(
+    prompt_id: int,
+    *,
+    text: str | None = None,
+    tags: str | None = None,
+) -> None:
+    fields: dict[str, object] = {}
+    if text is not None:
+        fields["text"] = text.strip()
+    if tags is not None:
+        fields["tags"] = tags.strip()
+    if not fields:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    values = list(fields.values()) + [prompt_id]
+    with get_connection() as conn:
+        conn.execute(f"UPDATE prompts SET {assignments} WHERE id = ?", values)
+
+
+def delete_prompt(prompt_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
+
+
 def list_prompts(
     search: str = "",
     sort_by: PromptSortField = "created_at",
