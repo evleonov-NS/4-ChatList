@@ -12,6 +12,7 @@ from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QAction, QBrush, QColor, QFontMetrics, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -24,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QDialog,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -34,8 +36,11 @@ from PyQt6.QtWidgets import (
 
 import db
 from dialogs import (
+    AboutDialog,
     MarkdownViewDialog,
     ModelsDialog,
+    PreferencesDialog,
+    PromptImproveDialog,
     PromptsDialog,
     SettingsDialog,
     _configure_readable_table,
@@ -46,13 +51,16 @@ from app_icon import apply_app_icon
 from export_utils import ExportRow, export_json, export_markdown
 from models import bootstrap_models, load_active_models, load_models, load_ready_models
 from network import PromptResult, setup_request_logging
-from themes import THEME_DARK, THEME_LIGHT, apply_theme, get_theme
+from themes import THEME_DARK, THEME_LIGHT, apply_appearance
+from prompt_assistant import PromptImprovement
 from prompt_search_ui import PromptSearchPanel, format_prompt_label
-from workers import PromptSendWorker
+from workers import PromptImproveWorker, PromptSendWorker, wait_for_worker
 
 PROMPT_VISIBLE_LINES = 3
-RESULT_ROW_LINES = 25
+RESULT_ROW_LINES = 6
+RESULT_ROW_MAX_LINES = 10
 TEXT_FRAME_PADDING = 12
+CHECK_COLUMN_WIDTH = 56
 
 
 @dataclass
@@ -80,6 +88,8 @@ class MainWindow(QMainWindow):
         self.history_mode = False
         self._selected_history: TempResult | None = None
         self.send_worker: PromptSendWorker | None = None
+        self.improve_worker: PromptImproveWorker | None = None
+        self._improve_dialog: PromptImproveDialog | None = None
         self._current_prompt_id: int | None = None
         self._selected_prompt_label: str = ""
 
@@ -112,16 +122,20 @@ class MainWindow(QMainWindow):
         menu_bar.addMenu(file_menu)
 
         settings_menu = QMenu("Настройки", self)
+        preferences_action = QAction("Настройки...", self)
+        preferences_action.triggered.connect(self._open_preferences_dialog)
         prompts_action = QAction("Промты...", self)
         prompts_action.triggered.connect(self._open_prompts_dialog)
         models_action = QAction("Модели...", self)
         models_action.triggered.connect(self._open_models_dialog)
-        app_settings_action = QAction("Параметры программы...", self)
+        app_settings_action = QAction("Расширенные параметры...", self)
         app_settings_action.triggered.connect(self._open_settings_dialog)
         history_action = QAction("История результатов", self)
         history_action.triggered.connect(self._toggle_history_mode)
         db_viewer_action = QAction("Просмотр базы данных...", self)
         db_viewer_action.triggered.connect(self._launch_test_db)
+        settings_menu.addAction(preferences_action)
+        settings_menu.addSeparator()
         settings_menu.addAction(prompts_action)
         settings_menu.addAction(models_action)
         settings_menu.addAction(app_settings_action)
@@ -129,6 +143,12 @@ class MainWindow(QMainWindow):
         settings_menu.addSeparator()
         settings_menu.addAction(db_viewer_action)
         menu_bar.addMenu(settings_menu)
+
+        help_menu = QMenu("Справка", self)
+        about_action = QAction("О программе...", self)
+        about_action.triggered.connect(self._open_about_dialog)
+        help_menu.addAction(about_action)
+        menu_bar.addMenu(help_menu)
 
         view_menu = QMenu("Вид", self)
         light_theme_action = QAction("Светлая тема", self)
@@ -142,12 +162,45 @@ class MainWindow(QMainWindow):
     def _set_theme(self, theme: str) -> None:
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            apply_theme(app, theme)
-        self._render_results_table()
+            apply_appearance(app, theme=theme)
+            self._update_font_metrics()
         self.statusBar().showMessage(
             "Светлая тема" if theme == THEME_LIGHT else "Тёмная тема",
             3000,
         )
+
+    def _update_font_metrics(self) -> None:
+        prompt_line = QFontMetrics(self.prompt_input.font()).lineSpacing()
+        self.prompt_input.setFixedHeight(
+            prompt_line * PROMPT_VISIBLE_LINES + TEXT_FRAME_PADDING
+        )
+        self._result_row_height = (
+            QFontMetrics(self.results_table.font()).lineSpacing() * RESULT_ROW_LINES
+        )
+        self._result_row_max_height = (
+            QFontMetrics(self.results_table.font()).lineSpacing() * RESULT_ROW_MAX_LINES
+        )
+        if self.temp_results:
+            self._render_results_table()
+
+    def _open_preferences_dialog(self) -> None:
+        dialog = PreferencesDialog(self)
+        dialog.appearance_changed.connect(self._on_appearance_changed)
+        dialog.exec()
+
+    def _on_appearance_changed(self, theme: str, font_size: int) -> None:
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_appearance(app, theme=theme, font_size=font_size)
+            self._update_font_metrics()
+        theme_label = "Светлая" if theme == THEME_LIGHT else "Тёмная"
+        self.statusBar().showMessage(
+            f"Настройки сохранены: {theme_label} тема, шрифт {font_size} pt",
+            4000,
+        )
+
+    def _open_about_dialog(self) -> None:
+        AboutDialog(self).exec()
 
     def _style_button(
         self, button: QPushButton, role: str, tooltip: str = ""
@@ -172,7 +225,8 @@ class MainWindow(QMainWindow):
         group, layout = self._step_group(
             "1. Запрос",
             "Новый запрос — введите текст в поле ниже. Сохранённый промт — "
-            "начните ввод в «Поиск»: откроется список совпадений, кликните по строке для выбора.",
+            "начните ввод в «Поиск»: откроется список совпадений, кликните по строке для выбора. "
+            "Кнопка «Улучшить промт» отправит текст в одну модель и предложит варианты.",
         )
 
         search_row = QHBoxLayout()
@@ -232,6 +286,17 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(self.prompt_input)
 
+        improve_row = QHBoxLayout()
+        self.improve_prompt_button = self._style_button(
+            QPushButton("Улучшить промт"),
+            "primary",
+            "Отправить промт в модель для улучшения и переформулировки",
+        )
+        self.improve_prompt_button.clicked.connect(self._on_improve_prompt)
+        improve_row.addWidget(self.improve_prompt_button)
+        improve_row.addStretch()
+        layout.addLayout(improve_row)
+
         return group
 
     def _build_actions_panel(self) -> QWidget:
@@ -271,8 +336,8 @@ class MainWindow(QMainWindow):
     def _build_results_panel(self) -> QWidget:
         group, layout = self._step_group(
             "3. Ответы",
-            "Сравните ответы моделей. Кнопка «История» показывает ранее сохранённые "
-            "результаты из базы; повторное нажатие вернёт ответы текущей сессии.",
+            "Сравните ответы моделей. Длинный текст обрезается по высоте — "
+            "двойной клик откроет полный ответ. «История» — сохранённые результаты из базы.",
         )
 
         header = QHBoxLayout()
@@ -308,12 +373,16 @@ class MainWindow(QMainWindow):
         self._result_row_height = (
             QFontMetrics(self.results_table.font()).lineSpacing() * RESULT_ROW_LINES
         )
+        self._result_row_max_height = (
+            QFontMetrics(self.results_table.font()).lineSpacing() * RESULT_ROW_MAX_LINES
+        )
         _configure_readable_table(self.results_table, self._result_row_height)
         results_header = self.results_table.horizontalHeader()
         results_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         results_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        results_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        results_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         self.results_table.setColumnWidth(1, 520)
+        self.results_table.setColumnWidth(2, CHECK_COLUMN_WIDTH)
         self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.results_table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
@@ -524,7 +593,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.show()
         self.statusBar().showMessage(f"Отправка в {len(ready_models)} моделей...")
 
-        self.send_worker = PromptSendWorker(ready_models, prompt_text)
+        self.send_worker = PromptSendWorker(ready_models, prompt_text, parent=self)
         self.send_worker.finished.connect(self._on_send_finished)
         self.send_worker.failed.connect(self._on_send_failed)
         self.send_worker.start()
@@ -613,11 +682,6 @@ class MainWindow(QMainWindow):
         self.results_table.setRowCount(0)
 
     def _render_results_table(self) -> None:
-        try:
-            self.results_table.itemChanged.disconnect(self._on_result_checked)
-        except TypeError:
-            pass
-
         search = self.results_filter.text().strip().lower()
         rows = self.temp_results
         if search:
@@ -629,8 +693,6 @@ class MainWindow(QMainWindow):
                 or search in row.created_at.lower()
                 or search in row.prompt_text.lower()
             ]
-
-        row_height = self._result_row_height
 
         self.results_table.blockSignals(True)
         if self.history_mode:
@@ -648,15 +710,9 @@ class MainWindow(QMainWindow):
                 answer_item = _table_cell(row.response_text)
                 self.results_table.setItem(row_index, 2, answer_item)
 
-                check_item = QTableWidgetItem()
-                check_item.setFlags(
-                    Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+                self._set_result_checkbox(
+                    row_index, 3, row.result_id, row.selected
                 )
-                check_item.setCheckState(
-                    Qt.CheckState.Checked if row.selected else Qt.CheckState.Unchecked
-                )
-                check_item.setData(Qt.ItemDataRole.UserRole, row.result_id)
-                self.results_table.setItem(row_index, 3, check_item)
         else:
             self._setup_live_columns()
             self.results_table.setRowCount(len(rows))
@@ -669,19 +725,61 @@ class MainWindow(QMainWindow):
                     answer_item.setForeground(QBrush(QColor("#C0392B")))
                 self.results_table.setItem(row_index, 1, answer_item)
 
-                check_item = QTableWidgetItem()
-                check_item.setFlags(
-                    Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+                self._set_result_checkbox(
+                    row_index, 2, row.model_id, row.selected
                 )
-                check_item.setCheckState(
-                    Qt.CheckState.Checked if row.selected else Qt.CheckState.Unchecked
-                )
-                check_item.setData(Qt.ItemDataRole.UserRole, row.model_id)
-                self.results_table.setItem(row_index, 2, check_item)
 
-        apply_table_row_heights(self.results_table, row_height)
+        check_col = 3 if self.history_mode else 2
+        self.results_table.setColumnWidth(check_col, CHECK_COLUMN_WIDTH)
+
+        apply_table_row_heights(
+            self.results_table,
+            self._result_row_height,
+            self._result_row_max_height,
+        )
         self.results_table.blockSignals(False)
-        self.results_table.itemChanged.connect(self._on_result_checked)
+
+    def _set_result_checkbox(
+        self,
+        row_index: int,
+        column: int,
+        result_key: int,
+        selected: bool,
+    ) -> None:
+        checkbox = QCheckBox()
+        checkbox.setChecked(selected)
+        checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        checkbox.setProperty("result_key", result_key)
+        checkbox.stateChanged.connect(self._on_result_checkbox_changed)
+
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(4, 6, 4, 4)
+        layout.setSpacing(0)
+        layout.addWidget(
+            checkbox,
+            alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+        )
+        layout.addStretch()
+        self.results_table.setCellWidget(row_index, column, wrapper)
+
+    def _on_result_checkbox_changed(self, state: int) -> None:
+        checkbox = self.sender()
+        if not isinstance(checkbox, QCheckBox):
+            return
+        key = checkbox.property("result_key")
+        if key is None:
+            return
+        selected = Qt.CheckState(state) == Qt.CheckState.Checked
+        key = int(key)
+        for row in self.temp_results:
+            if self.history_mode:
+                if row.result_id == key:
+                    row.selected = selected
+                    break
+            elif row.model_id == key:
+                row.selected = selected
+                break
 
     def _setup_live_columns(self) -> None:
         if self.results_table.columnCount() == 3:
@@ -691,7 +789,8 @@ class MainWindow(QMainWindow):
         header = self.results_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.results_table.setColumnWidth(2, CHECK_COLUMN_WIDTH)
 
     def _setup_history_columns(self) -> None:
         if self.results_table.columnCount() == 4:
@@ -704,30 +803,14 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.results_table.setColumnWidth(3, CHECK_COLUMN_WIDTH)
 
     def _apply_results_filter(self) -> None:
         if self.history_mode:
             self._load_history_into_results()
         elif self.temp_results:
             self._render_results_table()
-
-    def _on_result_checked(self, item: QTableWidgetItem) -> None:
-        check_col = 3 if self.history_mode else 2
-        if item.column() != check_col:
-            return
-        key = item.data(Qt.ItemDataRole.UserRole)
-        if key is None:
-            return
-        selected = item.checkState() == Qt.CheckState.Checked
-        for row in self.temp_results:
-            if self.history_mode:
-                if row.result_id == key:
-                    row.selected = selected
-                    break
-            elif row.model_id == key:
-                row.selected = selected
-                break
 
     def _results_context_menu(self, position) -> None:
         row = self.results_table.rowAt(position.y())
@@ -931,6 +1014,105 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.load_prompts()
 
+    def _improve_worker_busy(self) -> bool:
+        return self.improve_worker is not None and self.improve_worker.isRunning()
+
+    def _stop_improve_worker(self) -> None:
+        if self.improve_worker is None:
+            return
+        worker = self.improve_worker
+        self.improve_worker = None
+        try:
+            worker.finished.disconnect()
+        except TypeError:
+            pass
+        try:
+            worker.failed.disconnect()
+        except TypeError:
+            pass
+        wait_for_worker(worker)
+        worker.deleteLater()
+
+    def _start_improve_worker(
+        self,
+        dialog: PromptImproveDialog,
+        model,
+        prompt_text: str,
+    ) -> None:
+        if self._improve_worker_busy():
+            return
+        self._stop_improve_worker()
+        self.improve_worker = PromptImproveWorker(model, prompt_text, parent=self)
+        self.improve_worker.finished.connect(
+            lambda result: self._on_improve_worker_finished(dialog, result)
+        )
+        self.improve_worker.failed.connect(
+            lambda message: self._on_improve_worker_failed(dialog, message)
+        )
+        self.improve_worker.start()
+
+    def _on_improve_worker_finished(
+        self, dialog: PromptImproveDialog, result: object
+    ) -> None:
+        if self.improve_worker is not None:
+            wait_for_worker(self.improve_worker, 5000)
+            self.improve_worker.deleteLater()
+            self.improve_worker = None
+        if dialog is not self._improve_dialog:
+            return
+        assert isinstance(result, PromptImprovement)
+        dialog.show_result(result)
+
+    def _on_improve_worker_failed(
+        self, dialog: PromptImproveDialog, message: str
+    ) -> None:
+        if self.improve_worker is not None:
+            wait_for_worker(self.improve_worker, 5000)
+            self.improve_worker.deleteLater()
+            self.improve_worker = None
+        if dialog is not self._improve_dialog:
+            return
+        dialog.show_error(message)
+
+    def _on_improve_prompt(self) -> None:
+        prompt_text = self.prompt_input.toPlainText().strip()
+        if not prompt_text:
+            QMessageBox.warning(
+                self, "Улучшить промт", "Введите текст запроса для улучшения"
+            )
+            return
+
+        ready_models, errors = load_ready_models()
+        if not ready_models:
+            env_config.load_environment()
+            ready_models, errors = load_ready_models()
+        if not ready_models:
+            message = "Нет активных моделей с валидными ключами API."
+            if errors:
+                message += "\n\n" + "\n".join(errors)
+            QMessageBox.warning(self, "Модели", message)
+            return
+
+        self._stop_improve_worker()
+        dialog = PromptImproveDialog(
+            prompt_text,
+            ready_models,
+            self,
+            busy_checker=self._improve_worker_busy,
+        )
+        self._improve_dialog = dialog
+        dialog.improve_requested.connect(
+            lambda model: self._start_improve_worker(dialog, model, prompt_text)
+        )
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._improve_dialog = None
+        self._stop_improve_worker()
+        if not accepted:
+            return
+        if dialog.selected_text:
+            self.prompt_input.setPlainText(dialog.selected_text)
+            self.statusBar().showMessage("Промт подставлен из AI-ассистента", 3000)
+
     def _launch_test_db(self) -> None:
         db_path = db.get_db_path()
         if not db_path.is_file():
@@ -977,6 +1159,28 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self)
         dialog.exec()
 
+    def closeEvent(self, event) -> None:
+        if self.send_worker is not None and self.send_worker.isRunning():
+            self.statusBar().showMessage(
+                "Дождитесь завершения отправки промта…",
+                5000,
+            )
+            event.ignore()
+            return
+        if self._improve_worker_busy():
+            self.statusBar().showMessage(
+                "Дождитесь завершения улучшения промта…",
+                5000,
+            )
+            event.ignore()
+            return
+        if self.send_worker is not None:
+            wait_for_worker(self.send_worker)
+            self.send_worker.deleteLater()
+            self.send_worker = None
+        self._stop_improve_worker()
+        super().closeEvent(event)
+
 
 def main() -> None:
     env_config.load_environment()
@@ -987,11 +1191,14 @@ def main() -> None:
         db.set_setting("request_timeout", "60")
     if not db.get_setting("theme"):
         db.set_setting("theme", THEME_LIGHT)
+    if not db.get_setting("font_size"):
+        db.set_setting("font_size", "10")
 
     app = QApplication(sys.argv)
-    apply_theme(app, get_theme())
+    apply_appearance(app)
     window = MainWindow()
     apply_app_icon(app, window)
+    window._update_font_metrics()
     window.load_prompts()
     window.load_models()
     window.show()

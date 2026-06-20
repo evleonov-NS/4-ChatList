@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from app_icon import apply_app_icon
 from dialogs import _configure_readable_table, _table_cell
-from themes import THEME_LIGHT, _build_stylesheet
+from themes import DEFAULT_FONT_SIZE, THEME_LIGHT, _build_stylesheet
 
 PAGE_SIZE = 50
 
@@ -696,7 +696,7 @@ def main() -> None:
             initial_path = candidate
 
     app = QApplication(sys.argv)
-    app.setStyleSheet(_build_stylesheet(THEME_LIGHT))
+    app.setStyleSheet(_build_stylesheet(THEME_LIGHT, DEFAULT_FONT_SIZE))
     window = MainWindow(initial_path)
     apply_app_icon(app, window)
     window.show()

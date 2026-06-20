@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -17,16 +18,46 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 import db
-from themes import inactive_row_brush
+from models import ModelConfig
+from prompt_assistant import PromptImprovement
+from themes import (
+    DEFAULT_FONT_SIZE,
+    MAX_FONT_SIZE,
+    MIN_FONT_SIZE,
+    THEME_DARK,
+    THEME_LIGHT,
+    get_font_size,
+    get_theme,
+    inactive_row_brush,
+    set_font_size,
+    set_theme,
+)
+
+APP_NAME = "ChatList"
+APP_VERSION = "1.1.0"
+APP_DESCRIPTION = (
+    "Приложение для отправки одного промта в несколько нейросетей, "
+    "сравнения ответов и сохранения лучших результатов."
+)
+
+ADAPTATION_LABELS = {
+    "code": "Для кода",
+    "analysis": "Для анализа",
+    "creative": "Для креатива",
+}
 
 
 def _table_cell(text: str) -> QTableWidgetItem:
@@ -47,13 +78,17 @@ def _configure_readable_table(table: QTableWidget, min_row_height: int = 0) -> N
     )
 
 
-def apply_table_row_heights(table: QTableWidget, min_row_height: int) -> None:
+def apply_table_row_heights(
+    table: QTableWidget,
+    min_row_height: int,
+    max_row_height: int | None = None,
+) -> None:
+    cap = max_row_height if max_row_height is not None else min_row_height
     table.resizeRowsToContents()
     for row_index in range(table.rowCount()):
-        table.setRowHeight(
-            row_index,
-            max(min_row_height, table.rowHeight(row_index)),
-        )
+        height = table.rowHeight(row_index)
+        height = max(min_row_height, min(cap, height))
+        table.setRowHeight(row_index, height)
 
 
 def _paint_inactive_row(table: QTableWidget, row_index: int, inactive: QBrush) -> None:
@@ -78,6 +113,231 @@ class MarkdownViewDialog(QDialog):
         close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_box.rejected.connect(self.reject)
         layout.addWidget(close_box)
+
+
+class PromptImproveDialog(QDialog):
+    """Панель улучшения промта с вариантами подстановки."""
+
+    improve_requested = pyqtSignal(object)
+
+    def __init__(
+        self,
+        original: str,
+        models: list[ModelConfig],
+        parent=None,
+        *,
+        busy_checker=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI-ассистент — улучшение промта")
+        self.setMinimumSize(820, 640)
+        self.resize(900, 720)
+
+        self._original = original
+        self._models = models
+        self._busy_checker = busy_checker
+        self._auto_started = False
+        self.selected_text: str | None = None
+
+        root = QVBoxLayout(self)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Модель:"))
+        self.model_combo = QComboBox()
+        for model in models:
+            self.model_combo.addItem(model.name, model.id)
+        self._select_saved_model()
+        controls.addWidget(self.model_combo, stretch=1)
+        self.retry_button = QPushButton("Повторить")
+        self.retry_button.clicked.connect(self._request_improvement)
+        controls.addWidget(self.retry_button)
+        root.addLayout(controls)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("hintLabel")
+        root.addWidget(self.status_label)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.hide()
+        root.addWidget(self.progress)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        self._content_layout = QVBoxLayout(content)
+
+        self._original_box = self._make_variant_group(
+            "Исходный промт",
+            original,
+            apply_enabled=False,
+        )
+        self._content_layout.addWidget(self._original_box)
+
+        self._improved_box = self._make_variant_group("Улучшенный промт")
+        self._content_layout.addWidget(self._improved_box)
+
+        self._alternatives_container = QVBoxLayout()
+        self._content_layout.addLayout(self._alternatives_container)
+
+        self._adaptations_container = QVBoxLayout()
+        self._content_layout.addLayout(self._adaptations_container)
+
+        self._content_layout.addStretch()
+        scroll.setWidget(content)
+        root.addWidget(scroll, stretch=1)
+
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        root.addWidget(close_box)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._auto_started:
+            self._auto_started = True
+            self._request_improvement()
+
+    def _select_saved_model(self) -> None:
+        raw = db.get_setting("prompt_assistant_model_id", "")
+        if not raw:
+            return
+        try:
+            model_id = int(raw)
+        except ValueError:
+            return
+        for index in range(self.model_combo.count()):
+            if self.model_combo.itemData(index) == model_id:
+                self.model_combo.setCurrentIndex(index)
+                return
+
+    def _selected_model(self) -> ModelConfig | None:
+        model_id = self.model_combo.currentData()
+        if model_id is None:
+            return None
+        for model in self._models:
+            if model.id == int(model_id):
+                return model
+        return self._models[0] if self._models else None
+
+    def _make_variant_group(
+        self,
+        title: str,
+        text: str = "",
+        *,
+        apply_enabled: bool = True,
+    ) -> QGroupBox:
+        group = QGroupBox(title)
+        group.setObjectName("stepGroup")
+        layout = QVBoxLayout(group)
+        editor = QTextEdit()
+        editor.setReadOnly(True)
+        editor.setPlainText(text)
+        editor.setMinimumHeight(72)
+        layout.addWidget(editor)
+
+        if apply_enabled:
+            apply_btn = QPushButton("Подставить в поле ввода")
+            apply_btn.setObjectName("primaryButton")
+            apply_btn.clicked.connect(lambda: self._apply_text(editor.toPlainText()))
+            layout.addWidget(apply_btn)
+
+        group._editor = editor  # type: ignore[attr-defined]
+        return group
+
+    def _clear_layout(self, layout: QVBoxLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _set_group_text(self, group: QGroupBox, text: str) -> None:
+        group._editor.setPlainText(text)  # type: ignore[attr-defined]
+
+    def _request_improvement(self) -> None:
+        if self._block_if_busy():
+            return
+        model = self._selected_model()
+        if model is None:
+            QMessageBox.warning(self, "Модель", "Нет доступных моделей")
+            return
+        db.set_setting("prompt_assistant_model_id", str(model.id))
+        self.begin_loading(model.name)
+        self.improve_requested.emit(model)
+
+    def begin_loading(self, model_name: str) -> None:
+        self.progress.show()
+        self.retry_button.setEnabled(False)
+        self.model_combo.setEnabled(False)
+        self.status_label.setText(f"Запрос к модели «{model_name}»…")
+        self._set_group_text(self._improved_box, "")
+        self._clear_layout(self._alternatives_container)
+        self._clear_layout(self._adaptations_container)
+
+    def show_result(self, result: PromptImprovement) -> None:
+        self._finish_loading()
+        if result.error:
+            self.status_label.setText(result.error)
+        else:
+            self.status_label.setText(f"Готово — модель «{result.model_name}»")
+
+        self._set_group_text(self._improved_box, result.improved)
+        self._clear_layout(self._alternatives_container)
+        for index, alt in enumerate(result.alternatives, start=1):
+            box = self._make_variant_group(f"Вариант {index}")
+            self._set_group_text(box, alt)
+            self._alternatives_container.addWidget(box)
+
+        self._clear_layout(self._adaptations_container)
+        for key, label in ADAPTATION_LABELS.items():
+            text = result.adaptations.get(key, "")
+            if not text:
+                continue
+            box = self._make_variant_group(label)
+            self._set_group_text(box, text)
+            self._adaptations_container.addWidget(box)
+
+    def show_error(self, message: str) -> None:
+        self._finish_loading()
+        self.status_label.setText(message)
+        QMessageBox.warning(self, "Ошибка", message)
+
+    def _finish_loading(self) -> None:
+        self.progress.hide()
+        self.retry_button.setEnabled(True)
+        self.model_combo.setEnabled(True)
+
+    def _worker_busy(self) -> bool:
+        if self._busy_checker is None:
+            return False
+        return bool(self._busy_checker())
+
+    def _block_if_busy(self) -> bool:
+        if not self._worker_busy():
+            return False
+        self.status_label.setText(
+            "Подождите завершения запроса к модели или дождитесь таймаута…"
+        )
+        return True
+
+    def reject(self) -> None:
+        if self._block_if_busy():
+            return
+        super().reject()
+
+    def _apply_text(self, text: str) -> None:
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        self.selected_text = cleaned
+        self.accept()
+
+    def closeEvent(self, event) -> None:
+        if self._block_if_busy():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 class ModelsDialog(QDialog):
@@ -472,9 +732,11 @@ class PromptsDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
+    """Расширенный редактор всех пар key/value в таблице settings."""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Настройки программы")
+        self.setWindowTitle("Расширенные параметры")
         self.setMinimumSize(560, 360)
 
         layout = QVBoxLayout(self)
@@ -553,6 +815,92 @@ class SettingsDialog(QDialog):
             return
         db.delete_setting(key_item.text())
         self.reload()
+
+
+class PreferencesDialog(QDialog):
+    """Настройки оформления: тема и размер шрифта."""
+
+    appearance_changed = pyqtSignal(str, int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Настройки")
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Светлая", THEME_LIGHT)
+        self.theme_combo.addItem("Тёмная", THEME_DARK)
+        current_theme = get_theme()
+        index = self.theme_combo.findData(current_theme)
+        if index >= 0:
+            self.theme_combo.setCurrentIndex(index)
+        form.addRow("Тема", self.theme_combo)
+
+        self.font_spin = QSpinBox()
+        self.font_spin.setRange(MIN_FONT_SIZE, MAX_FONT_SIZE)
+        self.font_spin.setSuffix(" pt")
+        self.font_spin.setValue(get_font_size())
+        form.addRow("Размер шрифта панелей", self.font_spin)
+
+        hint = QLabel(
+            "Тема и размер шрифта сохраняются в базе данных (таблица settings) "
+            "и применяются ко всем панелям главного окна."
+        )
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+
+        layout.addLayout(form)
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Сохранить")
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _save(self) -> None:
+        theme = self.theme_combo.currentData()
+        font_size = self.font_spin.value()
+        set_theme(str(theme))
+        set_font_size(font_size)
+        self.appearance_changed.emit(str(theme), font_size)
+        self.accept()
+
+
+class AboutDialog(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("О программе")
+        self.setMinimumSize(520, 420)
+
+        layout = QVBoxLayout(self)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setMarkdown(
+            f"# {APP_NAME}\n\n"
+            f"**Версия:** {APP_VERSION}\n\n"
+            f"{APP_DESCRIPTION}\n\n"
+            "## Возможности\n\n"
+            "- отправка промта в несколько моделей OpenRouter;\n"
+            "- сравнение ответов и сохранение в SQLite;\n"
+            "- AI-ассистент для улучшения промтов;\n"
+            "- история, экспорт MD/JSON, настройки темы и шрифта.\n\n"
+            "## Стек\n\n"
+            "Python · PyQt6 · SQLite · httpx · OpenRouter\n\n"
+            "## База данных\n\n"
+            "Настройки, промты, модели и результаты хранятся в `chatlist.db`."
+        )
+        layout.addWidget(browser)
+
+        close_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_box.rejected.connect(self.reject)
+        layout.addWidget(close_box)
 
 
 class ResultsHistoryDialog(QDialog):

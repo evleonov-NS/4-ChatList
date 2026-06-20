@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QBrush, QColor
+from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import QApplication
 
 import db
 
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
+
+DEFAULT_FONT_SIZE = 10
+MIN_FONT_SIZE = 8
+MAX_FONT_SIZE = 20
 
 COLORS = {
     "light": {
@@ -51,30 +55,52 @@ def set_theme(theme: str) -> None:
     db.set_setting("theme", theme if theme in (THEME_LIGHT, THEME_DARK) else THEME_LIGHT)
 
 
+def get_font_size() -> int:
+    raw = db.get_setting("font_size", str(DEFAULT_FONT_SIZE))
+    try:
+        size = int(raw)
+    except ValueError:
+        return DEFAULT_FONT_SIZE
+    return max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, size))
+
+
+def set_font_size(size: int) -> None:
+    clamped = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(size)))
+    db.set_setting("font_size", str(clamped))
+
+
 def inactive_row_brush(theme: str | None = None) -> QBrush:
     name = theme or get_theme()
     color = COLORS[name]["inactive_row"]
     return QBrush(QColor(color))
 
 
-def _build_stylesheet(theme: str) -> str:
+def _build_stylesheet(theme: str, font_size: int) -> str:
     c = COLORS[theme]
+    hint_size = max(MIN_FONT_SIZE, font_size - 1)
+    header_size = font_size + 1
     return f"""
     QMainWindow, QDialog, QWidget {{
         background-color: {c["bg"]};
         color: {c["text"]};
+        font-size: {font_size}pt;
     }}
     QLabel {{
         color: {c["text"]};
+        font-size: {font_size}pt;
     }}
     QLabel#hintLabel {{
         color: {c["text_muted"]};
-        font-size: 12px;
+        font-size: {hint_size}pt;
         padding: 0 2px 4px 2px;
     }}
     QLabel#stepLabel {{
         font-weight: 600;
         color: {c["text"]};
+        font-size: {header_size}pt;
+    }}
+    QGroupBox {{
+        font-size: {font_size}pt;
     }}
     QGroupBox#stepGroup {{
         background-color: {c["surface"]};
@@ -83,6 +109,7 @@ def _build_stylesheet(theme: str) -> str:
         margin-top: 10px;
         padding: 12px 12px 10px 12px;
         font-weight: 600;
+        font-size: {header_size}pt;
     }}
     QGroupBox#stepGroup::title {{
         subcontrol-origin: margin;
@@ -103,6 +130,7 @@ def _build_stylesheet(theme: str) -> str:
         border: none;
         outline: none;
         padding: 2px;
+        font-size: {font_size}pt;
     }}
     QListWidget#promptSearchList::item {{
         padding: 4px 6px;
@@ -114,13 +142,14 @@ def _build_stylesheet(theme: str) -> str:
     QListWidget#promptSearchList::item:hover {{
         background-color: {c["surface_alt"]};
     }}
-    QLineEdit, QTextEdit, QComboBox, QTableWidget, QListWidget {{
+    QLineEdit, QTextEdit, QComboBox, QTableWidget, QListWidget, QSpinBox {{
         background-color: {c["surface"]};
         color: {c["text"]};
         border: 1px solid {c["border"]};
         border-radius: 6px;
         padding: 4px;
         selection-background-color: {c["selection"]};
+        font-size: {font_size}pt;
     }}
     QComboBox::drop-down {{
         border: none;
@@ -128,6 +157,11 @@ def _build_stylesheet(theme: str) -> str:
     QTableWidget {{
         gridline-color: {c["border"]};
         alternate-background-color: {c["surface_alt"]};
+        font-size: {font_size}pt;
+    }}
+    QTableWidget::indicator {{
+        width: 18px;
+        height: 18px;
     }}
     QHeaderView::section {{
         background-color: {c["header"]};
@@ -135,6 +169,7 @@ def _build_stylesheet(theme: str) -> str:
         border: 1px solid {c["border"]};
         padding: 6px;
         font-weight: bold;
+        font-size: {font_size}pt;
     }}
     QPushButton {{
         background-color: {c["surface"]};
@@ -144,6 +179,7 @@ def _build_stylesheet(theme: str) -> str:
         padding: 8px 16px;
         font-weight: 600;
         min-height: 20px;
+        font-size: {font_size}pt;
     }}
     QPushButton:hover {{
         background-color: {c["surface_alt"]};
@@ -206,6 +242,7 @@ def _build_stylesheet(theme: str) -> str:
     QMenuBar {{
         background-color: {c["surface"]};
         color: {c["text"]};
+        font-size: {font_size}pt;
     }}
     QMenuBar::item:selected {{
         background-color: {c["accent_soft"]};
@@ -214,6 +251,7 @@ def _build_stylesheet(theme: str) -> str:
         background-color: {c["surface"]};
         color: {c["text"]};
         border: 1px solid {c["border"]};
+        font-size: {font_size}pt;
     }}
     QMenu::item:selected {{
         background-color: {c["selection"]};
@@ -221,12 +259,14 @@ def _build_stylesheet(theme: str) -> str:
     QStatusBar {{
         background-color: {c["surface_alt"]};
         color: {c["text_muted"]};
+        font-size: {hint_size}pt;
     }}
     QProgressBar {{
         border: 1px solid {c["border"]};
         border-radius: 6px;
         background-color: {c["surface"]};
         text-align: center;
+        font-size: {hint_size}pt;
     }}
     QProgressBar::chunk {{
         background-color: {c["accent"]};
@@ -234,6 +274,7 @@ def _build_stylesheet(theme: str) -> str:
     }}
     QCheckBox {{
         color: {c["text"]};
+        font-size: {font_size}pt;
     }}
     QTextBrowser {{
         background-color: {c["surface"]};
@@ -241,14 +282,31 @@ def _build_stylesheet(theme: str) -> str:
         border: 1px solid {c["border"]};
         border-radius: 8px;
         padding: 12px;
+        font-size: {font_size}pt;
     }}
     """
 
 
-def apply_theme(app: QApplication, theme: str | None = None) -> str:
+def apply_appearance(
+    app: QApplication,
+    theme: str | None = None,
+    font_size: int | None = None,
+) -> tuple[str, int]:
     name = theme or get_theme()
     if name not in COLORS:
         name = THEME_LIGHT
-    app.setStyleSheet(_build_stylesheet(name))
+    size = font_size if font_size is not None else get_font_size()
+    size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, size))
+
+    font = QFont(app.font())
+    font.setPointSize(size)
+    app.setFont(font)
+    app.setStyleSheet(_build_stylesheet(name, size))
     set_theme(name)
+    set_font_size(size)
+    return name, size
+
+
+def apply_theme(app: QApplication, theme: str | None = None) -> str:
+    name, _ = apply_appearance(app, theme=theme)
     return name
