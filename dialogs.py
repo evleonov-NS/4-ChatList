@@ -841,9 +841,12 @@ class PreferencesDialog(QDialog):
 
         self.font_spin = QSpinBox()
         self.font_spin.setRange(MIN_FONT_SIZE, MAX_FONT_SIZE)
-        self.font_spin.setSuffix(" pt")
         self.font_spin.setValue(get_font_size())
-        form.addRow("Размер шрифта панелей", self.font_spin)
+        font_row = QHBoxLayout()
+        font_row.addWidget(self.font_spin)
+        font_row.addWidget(QLabel("pt"))
+        font_row.addStretch()
+        form.addRow("Размер шрифта панелей", font_row)
 
         hint = QLabel(
             "Тема и размер шрифта сохраняются в базе данных (таблица settings) "

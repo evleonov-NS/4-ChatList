@@ -150,25 +150,6 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
         menu_bar.addMenu(help_menu)
 
-        view_menu = QMenu("Вид", self)
-        light_theme_action = QAction("Светлая тема", self)
-        light_theme_action.triggered.connect(lambda: self._set_theme(THEME_LIGHT))
-        dark_theme_action = QAction("Тёмная тема", self)
-        dark_theme_action.triggered.connect(lambda: self._set_theme(THEME_DARK))
-        view_menu.addAction(light_theme_action)
-        view_menu.addAction(dark_theme_action)
-        menu_bar.addMenu(view_menu)
-
-    def _set_theme(self, theme: str) -> None:
-        app = QApplication.instance()
-        if isinstance(app, QApplication):
-            apply_appearance(app, theme=theme)
-            self._update_font_metrics()
-        self.statusBar().showMessage(
-            "Светлая тема" if theme == THEME_LIGHT else "Тёмная тема",
-            3000,
-        )
-
     def _update_font_metrics(self) -> None:
         prompt_line = QFontMetrics(self.prompt_input.font()).lineSpacing()
         self.prompt_input.setFixedHeight(
