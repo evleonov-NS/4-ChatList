@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="ChatList — отправка одного промта в несколько нейросетей, сравнение ответов и сохранение лучших результатов.">
+  <meta name="description" content="ChatList — учебное приложение на Python и PyQt6, созданное в Cursor в рамках курса Константина Шереметьева «Программирование на Cursor».">
   <title>ChatList — сравнение ответов нейросетей</title>
   <style>
     :root {
@@ -77,6 +77,20 @@
       color: var(--text-muted);
       max-width: 640px;
     }
+
+    .edu-notice {
+      margin-top: 16px;
+      max-width: 640px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 12px;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+    }
+
+    .edu-notice strong { color: var(--text); }
 
     .actions {
       margin-top: 28px;
@@ -198,6 +212,11 @@
           Отправьте один промт в несколько нейросетей, сравните ответы рядом
           и сохраните лучшие результаты в SQLite.
         </p>
+        <p class="edu-notice">
+          <strong>Учебная программа.</strong> Проект создан в <strong>Cursor</strong>
+          в ходе изучения курса Константина Шереметьева
+          «Программирование на Cursor».
+        </p>
         <div class="actions">
           <a class="btn btn-primary" href="https://github.com/evleonov-NS/4-ChatList/releases/latest" id="download-btn">
             Скачать установщик
@@ -269,7 +288,7 @@ python main.py</pre>
   </main>
 
   <footer class="wrap">
-    <p>ChatList · MIT License</p>
+    <p>ChatList · MIT License · учебный проект (Cursor, курс Константина Шереметьева)</p>
     <div class="links">
       <a href="https://github.com/evleonov-NS/4-ChatList/releases">Все релизы</a>
       <a href="https://github.com/evleonov-NS/4-ChatList/issues">Issues</a>
