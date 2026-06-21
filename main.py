@@ -54,6 +54,7 @@ from network import PromptResult, setup_request_logging
 from themes import THEME_DARK, THEME_LIGHT, apply_appearance
 from prompt_assistant import PromptImprovement
 from prompt_search_ui import PromptSearchPanel, format_prompt_label
+from version import __version__
 from workers import PromptImproveWorker, PromptSendWorker, wait_for_worker
 
 PROMPT_VISIBLE_LINES = 3
@@ -78,7 +79,7 @@ class TempResult:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("ChatList")
+        self.setWindowTitle(f"ChatList {__version__}")
         self.setMinimumSize(960, 720)
 
         self.prompts: list[db.Prompt] = []
@@ -1176,6 +1177,8 @@ def main() -> None:
         db.set_setting("font_size", "10")
 
     app = QApplication(sys.argv)
+    app.setApplicationName("ChatList")
+    app.setApplicationVersion(__version__)
     apply_appearance(app)
     window = MainWindow()
     apply_app_icon(app, window)

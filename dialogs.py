@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 
 import db
 from models import ModelConfig
+from version import __version__
 from prompt_assistant import PromptImprovement
 from themes import (
     DEFAULT_FONT_SIZE,
@@ -47,7 +48,6 @@ from themes import (
 )
 
 APP_NAME = "ChatList"
-APP_VERSION = "1.1.0"
 APP_DESCRIPTION = (
     "Приложение для отправки одного промта в несколько нейросетей, "
     "сравнения ответов и сохранения лучших результатов."
@@ -887,7 +887,7 @@ class AboutDialog(QDialog):
         browser.setOpenExternalLinks(True)
         browser.setMarkdown(
             f"# {APP_NAME}\n\n"
-            f"**Версия:** {APP_VERSION}\n\n"
+            f"**Версия:** {__version__}\n\n"
             f"{APP_DESCRIPTION}\n\n"
             "## Возможности\n\n"
             "- отправка промта в несколько моделей OpenRouter;\n"

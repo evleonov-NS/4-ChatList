@@ -40,7 +40,7 @@ python main.py
 ```
 
 > **Важно:** файл `.env` должен лежать в папке проекта (рядом с `main.py`)  
-> или рядом с `4-ChatList.exe` при запуске собранной версии.
+> или рядом с `4-ChatList-<версия>.exe` при запуске собранной версии.
 
 ```powershell
 Copy-Item .env.example .env
@@ -71,11 +71,22 @@ export_utils.py  — экспорт MD / JSON
 
 ## Сборка exe
 
-См. [docs/run-and-build.md](docs/run-and-build.md).
+Версия задаётся в `version.py` (`__version__`). См. [docs/run-and-build.md](docs/run-and-build.md).
 
 ```powershell
-python -m pip install pyinstaller
-python -m PyInstaller 4-ChatList.spec
+.\build.ps1
+```
+
+## Публикация
+
+- [docs/publish.md](docs/publish.md) — пошаговая инструкция GitHub Release и GitHub Pages
+- [docs/release-notes-template.md](docs/release-notes-template.md) — шаблон описания релиза
+- Сайт: [evleonov-NS.github.io/4-ChatList](https://evleonov-NS.github.io/4-ChatList/) (после включения Pages)
+
+```powershell
+.\scripts\prepare-release.ps1
+git tag -a v1.1.0 -m "ChatList 1.1.0"
+git push origin v1.1.0
 ```
 
 ## Документация

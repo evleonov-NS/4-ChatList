@@ -12,6 +12,7 @@ import httpx
 
 import db
 from models import ModelConfig, get_api_key
+from version import __version__
 
 DEFAULT_TIMEOUT = 60.0
 LOG_DIR = Path("logs")
@@ -36,10 +37,13 @@ def setup_request_logging() -> None:
         return
     handler = logging.FileHandler(LOG_DIR / "requests.log", encoding="utf-8")
     handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        logging.Formatter(
+            f"%(asctime)s [ChatList {__version__}] [%(levelname)s] %(message)s"
+        )
     )
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+    logger.info("ChatList %s — логирование запросов включено", __version__)
 
 
 def _get_timeout() -> float:
